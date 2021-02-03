@@ -57,6 +57,7 @@ void flash() {
     int light_on = randInRange(MIN_LED_DURATION, MAX_LED_DURATION);
     delay(light_on);
 
+    // Keep LED on every second round
     int randomNum = rand();
     if ((randomNum % 2) == 0){
       // All off after one led
