@@ -15,7 +15,7 @@
   1 // Min length of flash line (number of WS2800 to be turned on)
 #define MAX_FLASH_LINE_SIZE                                                    \
   10 // Min length of flash line (number of WS2800 to be turned on)
-#define RAINBOW_WAIT 5 // Controlls the speed of the rainbow mode
+#define RAINBOW_WAIT 20 // Controlls the speed of the rainbow mode
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 // Parameter 1 = number of pixels in strip
@@ -136,14 +136,33 @@ void flashLineOnSound(bool initial) {
   }
 }
 
-void allWhite(bool initial) {
-  if (initial) {
+
+/* White */
+
+void * allWhiteConstructor() {
+  bool *state = (bool *) malloc(sizeof(bool));
+  *state = true;
+  return state;
+}
+
+void allWhiteDestructor(void *state) {
+  free(state);
+}
+
+void allWhite(void *in_state) {
+  bool *state = ((bool *) in_state);
+  if (*state) {
     for (int i = 0; i < MC_NUMBER; i++) {
       strip.setPixelColor(i, white);
       strip.show();
     }
+    Serial.println(*state);
+    *state = false;
   }
 }
+
+
+/* Rainbow */
 
 // From NeoPixels Lib
 // Input a value 0 to 255 to get a color value.
@@ -161,26 +180,79 @@ uint32_t Wheel(byte WheelPos) {
   return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
 }
 
-// From NeoPixels Lib
-void rainbowCycle(bool initial) {
-  int i, j;
+struct RainbowState {
+  uint8_t remaining_delay;
+  uint16_t j;
+};
 
-  for (j = 0; j < 256 * 5; j++) { // 5 cycles of all colors on wheel
-    for (i = 0; i < strip.numPixels(); i++) {
-      strip.setPixelColor(i, Wheel(((i * 256 / strip.numPixels()) + j) & 255));
-    }
-    strip.show();
-    delay(RAINBOW_WAIT);
-  }
+// From NeoPixels Lib
+void * rainbowCycleConstructor() {
+  return calloc(1, sizeof(struct RainbowState));
 }
 
-void (*const PROGRAMMS[])(bool) = {&flashOnSound, &allWhite, &flashLineOnSound,
-                                   &rainbowCycle};
+void rainbowCycleDestructor(void *state) {
+  free(state);
+}
+
+void rainbowCycle(void *in_state) {
+  struct RainbowState *state = ((struct RainbowState *) in_state);
+  
+  static unsigned long last_time = millis();
+  unsigned long curr_time = millis();
+
+  if (state->remaining_delay > 0) {
+    unsigned long time_passed = max(curr_time - last_time, 0);
+    if (state->remaining_delay <= time_passed) {
+      state->remaining_delay = 0;
+    } else {
+      state->remaining_delay -= time_passed;
+    }
+  }
+
+  if (state->remaining_delay == 0) {
+    state->j++;
+
+    for (int i = 0; i < strip.numPixels(); i++) {
+      strip.setPixelColor(i, Wheel(((i * 256 / strip.numPixels()) + state->j) & 255));
+    }
+    strip.show();
+
+    if (state->j == 256) {
+      *state = {0};
+    } else {
+      state->remaining_delay = RAINBOW_WAIT;
+    }
+  }
+
+  last_time = curr_time;
+}
+
+
+/* Controlls */
+
+struct ProgramInfo {
+  void * (* constructor)();
+  void (* step)(void *state);
+  void (* destructor)(void *state);
+};
+
+struct ProgramInfo PROGRAMMS[] = {
+ {
+  .constructor = &rainbowCycleConstructor,
+  .step = &rainbowCycle,
+  .destructor = &rainbowCycleDestructor
+ },
+  {
+  .constructor = &allWhiteConstructor,
+  .step = &allWhite,
+  .destructor = &allWhiteDestructor
+ }
+};
 int mode_state = 0; // index of light mode (starts at 0 an max=NUM_MODES)
 bool button_down = false;
-bool first_run = true;
+void *state = NULL;
 
-void loop() {
+void loop() {  
   bool button_pressed = false;
 
   if (digitalRead(BUTTON)) {
@@ -192,8 +264,17 @@ void loop() {
   }
 
   if (button_pressed) {
+    if (state != NULL) {
+      PROGRAMMS[mode_state % ARRSIZE(PROGRAMMS)].destructor(state);
+      state = NULL;
+    }
     mode_state++;
   }
-  PROGRAMMS[mode_state % ARRSIZE(PROGRAMMS)](button_pressed || first_run);
-  first_run = false;
+
+  struct ProgramInfo prog = PROGRAMMS[mode_state % ARRSIZE(PROGRAMMS)];
+  if (state == NULL) {
+    state = prog.constructor();
+  }
+
+  prog.step(state);
 }
