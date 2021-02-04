@@ -55,7 +55,26 @@ int randomInRange(int min, int max) {
   } while (true);
 }
 
+/* FlashOnSound */
+struct FlashOnSoundState {
+  uint8_t remaining_delay_flash_on;
+  uint8_t remaining_delay_between_flash;
+  uint8_t remaining_delay_restart;
+  uint16_t j;
+};
+
+void * flashOnSoundConstructor() {
+  return calloc(1, sizeof(struct FlashOnSoundState));
+}
+
+void flashOnSoundDestructor(void *state) {
+  free(state);
+}
+
+
 void flashOnSound(bool initial) {
+  struct FlashOnSoundState *state = ((struct FlashOnSoundState *) in_state);
+  
   strip.clear();
   strip.show();
   if (digitalRead(D_IN)) {
@@ -164,9 +183,7 @@ void allWhite(void *in_state) {
 
 /* Rainbow */
 
-// From NeoPixels Lib
 // Input a value 0 to 255 to get a color value.
-// The colours are a transition r - g - b - back to r.
 uint32_t Wheel(byte WheelPos) {
   WheelPos = 255 - WheelPos;
   if (WheelPos < 85) {
@@ -185,7 +202,6 @@ struct RainbowState {
   uint16_t j;
 };
 
-// From NeoPixels Lib
 void * rainbowCycleConstructor() {
   return calloc(1, sizeof(struct RainbowState));
 }
