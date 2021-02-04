@@ -1,16 +1,16 @@
 #include <Adafruit_NeoPixel.h>
-#define LED_OUT 6            // LED Output
-#define D_IN 7               // Mic Digital Input (sound sensor)
-#define MC_NUMBER 50         // Number of WS2811 microcontrollers on LED strip
-#define BUTTON 2             // Button to switch between modes
-#define MIN_LED_DURATION 90  // Amount of time the LEDs light up (in ms)
-#define MAX_LED_DURATION 150 // Amount of time the LEDs light up (in ms)
-#define MIN_LED 3            // Min number of LEDs per flash
-#define MAX_LED 5            // Max number of LEDs per flash
-#define MIN_LED_DELAY 50     // Min time between LED in a single flash (in ms)
-#define MAX_LED_DELAY 200    // Max time between LED in a single flash (in ms)
-#define MIN_FLASH_DELAY 1000 // Min time between flashes (in ms)
-#define MAX_FLASH_DELAY 2000 // Max time between flashes (in ms)
+#define LED_OUT 6         // LED Output
+#define D_IN 7            // Mic Digital Input (sound sensor)
+#define MC_NUMBER 50      // Number of WS2811 microcontrollers on LED strip
+#define BUTTON 2          // Button to switch between modes
+#define MIN_FLASH_ON 90   // Amount of time the LEDs light up (in ms)
+#define MAX_FLASH_ON 150  // Amount of time the LEDs light up (in ms)
+#define MIN_LED 3         // Min number of LEDs per flash
+#define MAX_LED 5         // Max number of LEDs per flash
+#define MIN_FLASH_OFF 50  // Min time between LED in a single flash (in ms)
+#define MAX_FLASH_OFF 200 // Max time between LED in a single flash (in ms)
+#define MIN_DELAY_BETWEEN_FLASH_CYCLES 1000 // Min time between flashes (in ms)
+#define MAX_DELAY_BETWEEN_FLASH_CYCLES 2000 // Max time between flashes (in ms)
 #define MIN_FLASH_LINE_SIZE                                                    \
   1 // Min length of flash line (number of WS2800 to be turned on)
 #define MAX_FLASH_LINE_SIZE                                                    \
@@ -33,7 +33,6 @@ uint32_t white = strip.Color(255, 255, 255);
 static unsigned long int delay_time = 0;
 
 void setup() {
-
   strip.begin();            // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();             // Turn OFF all pixels
   strip.setBrightness(255); // Set BRIGHTNESS to about 1/5 (max = 255)
@@ -55,131 +54,119 @@ int randomInRange(int min, int max) {
   } while (true);
 }
 
+enum FlashOnSoundCycle {
+  FLASH_ON,
+  FLASH_OFF,
+  WAIT
+} __attribute__((packed));
+
 /* FlashOnSound */
 struct FlashOnSoundState {
-  uint8_t remaining_delay_flash_on;
-  uint8_t remaining_delay_between_flash;
-  uint8_t remaining_delay_restart;
-  uint16_t j;
+  uint16_t remaining_delay;
+  int num_of_leds_to_light_up;
+  uint16_t i;
+  enum FlashOnSoundCycle cycle_step;
 };
 
-void * flashOnSoundConstructor() {
-  return calloc(1, sizeof(struct FlashOnSoundState));
-}
-
-void flashOnSoundDestructor(void *state) {
-  free(state);
-}
-
-
-void flashOnSound(bool initial) {
-  struct FlashOnSoundState *state = ((struct FlashOnSoundState *) in_state);
-  
+void *flashOnSoundConstructor() {
   strip.clear();
   strip.show();
-  if (digitalRead(D_IN)) {
-    int num_of_leds_to_light_up = randomInRange(MIN_LED, MAX_LED);
-    int flash_delay = randomInRange(MIN_FLASH_DELAY, MAX_FLASH_DELAY);
+  struct FlashOnSoundState *state =
+      (struct FlashOnSoundState *)calloc(1, sizeof(struct FlashOnSoundState));
+  state->i = 0;
+  state->num_of_leds_to_light_up = randomInRange(MIN_LED, MAX_LED);
+  state->remaining_delay = 0;
+  state->cycle_step = FLASH_ON;
+  return state;
+}
 
-    for (int i = 0; i < num_of_leds_to_light_up; i++) {
-      // Get index of random LED on the strip
-      int led_idx = randomInRange(0, MC_NUMBER - 1);
-      // Light up random LED
-      strip.setPixelColor(led_idx, white);
-      strip.setPixelColor(led_idx + 1, white);
+void flashOnSoundDestructor(void *state) { free(state); }
+
+void flashOnSound(void *in_state) {
+  // if (digitalRead(D_IN)) {
+
+  struct FlashOnSoundState *state = ((struct FlashOnSoundState *)in_state);
+
+  static unsigned long last_time = millis();
+  unsigned long curr_time = millis();
+
+  if (state->remaining_delay > 0) {
+    unsigned long time_passed = max(curr_time - last_time, 0);
+    if (state->remaining_delay <= time_passed) {
+      state->remaining_delay = 0;
+    } else {
+      state->remaining_delay -= time_passed;
+    }
+  }
+
+  if (state->cycle_step == FLASH_ON && state->remaining_delay == 0 &&
+      (digitalRead(D_IN) || state->i > 0)) {
+    // Get index of random LED on the strip
+    int led_idx = randomInRange(0, MC_NUMBER - 1);
+    // Light up random LED
+    strip.setPixelColor(led_idx, white);
+    strip.setPixelColor(led_idx + 1, white);
+    strip.show();
+
+    state->remaining_delay = randomInRange(MIN_FLASH_ON, MAX_FLASH_ON);
+    state->cycle_step = FLASH_OFF;
+  }
+
+  if (state->cycle_step == FLASH_OFF && state->remaining_delay == 0) {
+    // Keep LED on (almost) every second round
+    int randomNum = rand();
+    if ((randomNum % 2) == 0) {
+      // All off after one led
+      strip.clear();
       strip.show();
-
-      int time_light_on = randomInRange(MIN_LED_DURATION, MAX_LED_DURATION);
-      delay(time_light_on);
-
-      // Keep LED on (almost) every second round
-      int randomNum = rand();
-      if ((randomNum % 2) == 0) {
-        // All off after one led
-        strip.clear();
-        strip.show();
-      }
-
-      // Random delay between flashes
-      int led_delay = randomInRange(MIN_LED_DELAY, MAX_LED_DELAY);
-      delay(led_delay);
     }
 
+    state->remaining_delay = randomInRange(MIN_FLASH_OFF, MAX_FLASH_OFF);
+    state->i++;
+    if (state->i < state->num_of_leds_to_light_up) {
+      state->cycle_step = FLASH_ON;
+
+    } else {
+      state->cycle_step = WAIT;
+    }
+  }
+
+  if (state->cycle_step == WAIT && state->remaining_delay == 0) {
     // All off after a flash
     strip.clear();
     strip.show();
 
-    delay(flash_delay);
+    state->remaining_delay = randomInRange(MIN_DELAY_BETWEEN_FLASH_CYCLES,
+                                           MAX_DELAY_BETWEEN_FLASH_CYCLES);
+    // set up for next cycle
+    state->cycle_step = FLASH_ON;
+    state->i = 0;
+    state->num_of_leds_to_light_up = randomInRange(MIN_LED, MAX_LED);
   }
+
+  last_time = curr_time;
 }
-
-void flashLineOnSound(bool initial) {
-  strip.clear();
-  strip.show();
-  if (digitalRead(D_IN)) {
-    int num_of_leds_to_light_up = randomInRange(MIN_LED, MAX_LED);
-    int flash_delay = randomInRange(MIN_FLASH_DELAY, MAX_FLASH_DELAY);
-
-    for (int i = 0; i < num_of_leds_to_light_up; i++) {
-      int length_of_flash_line =
-          randomInRange(MIN_FLASH_LINE_SIZE, MAX_FLASH_LINE_SIZE);
-      // Get index of random LED on the strip
-      int led_idx = randomInRange(0, MC_NUMBER - 1);
-      // Light up random LED line
-      for (int idx = led_idx; idx < led_idx + length_of_flash_line; idx++) {
-        strip.setPixelColor(idx, white);
-        strip.show();
-      }
-
-      int time_light_on = randomInRange(MIN_LED_DURATION, MAX_LED_DURATION);
-      delay(time_light_on);
-
-      // Keep LED on (almost) every second round
-      int randomNum = rand();
-      if ((randomNum % 2) == 0) {
-        // All off after one led
-        strip.clear();
-        strip.show();
-      }
-
-      // Random delay between flashes
-      int led_delay = randomInRange(MIN_LED_DELAY, MAX_LED_DELAY);
-      delay(led_delay);
-    }
-
-    // All off after a flash
-    strip.clear();
-    strip.show();
-
-    delay(flash_delay);
-  }
-}
-
 
 /* White */
 
-void * allWhiteConstructor() {
-  bool *state = (bool *) malloc(sizeof(bool));
+void *allWhiteConstructor() {
+  bool *state = (bool *)malloc(sizeof(bool));
   *state = true;
   return state;
 }
 
-void allWhiteDestructor(void *state) {
-  free(state);
-}
+void allWhiteDestructor(void *state) { free(state); }
 
 void allWhite(void *in_state) {
-  bool *state = ((bool *) in_state);
+  bool *state = ((bool *)in_state);
   if (*state) {
     for (int i = 0; i < MC_NUMBER; i++) {
       strip.setPixelColor(i, white);
       strip.show();
     }
-    Serial.println(*state);
     *state = false;
   }
 }
-
 
 /* Rainbow */
 
@@ -202,17 +189,15 @@ struct RainbowState {
   uint16_t j;
 };
 
-void * rainbowCycleConstructor() {
+void *rainbowCycleConstructor() {
   return calloc(1, sizeof(struct RainbowState));
 }
 
-void rainbowCycleDestructor(void *state) {
-  free(state);
-}
+void rainbowCycleDestructor(void *state) { free(state); }
 
 void rainbowCycle(void *in_state) {
-  struct RainbowState *state = ((struct RainbowState *) in_state);
-  
+  struct RainbowState *state = ((struct RainbowState *)in_state);
+
   static unsigned long last_time = millis();
   unsigned long curr_time = millis();
 
@@ -229,7 +214,8 @@ void rainbowCycle(void *in_state) {
     state->j++;
 
     for (int i = 0; i < strip.numPixels(); i++) {
-      strip.setPixelColor(i, Wheel(((i * 256 / strip.numPixels()) + state->j) & 255));
+      strip.setPixelColor(
+          i, Wheel(((i * 256 / strip.numPixels()) + state->j) & 255));
     }
     strip.show();
 
@@ -243,32 +229,28 @@ void rainbowCycle(void *in_state) {
   last_time = curr_time;
 }
 
-
 /* Controlls */
 
 struct ProgramInfo {
-  void * (* constructor)();
-  void (* step)(void *state);
-  void (* destructor)(void *state);
+  void *(*constructor)();
+  void (*step)(void *state);
+  void (*destructor)(void *state);
 };
 
-struct ProgramInfo PROGRAMMS[] = {
- {
-  .constructor = &rainbowCycleConstructor,
-  .step = &rainbowCycle,
-  .destructor = &rainbowCycleDestructor
- },
-  {
-  .constructor = &allWhiteConstructor,
-  .step = &allWhite,
-  .destructor = &allWhiteDestructor
- }
-};
+struct ProgramInfo PROGRAMMS[] = {{.constructor = &flashOnSoundConstructor,
+                                   .step = &flashOnSound,
+                                   .destructor = &flashOnSoundDestructor},
+                                  {.constructor = &rainbowCycleConstructor,
+                                   .step = &rainbowCycle,
+                                   .destructor = &rainbowCycleDestructor},
+                                  {.constructor = &allWhiteConstructor,
+                                   .step = &allWhite,
+                                   .destructor = &allWhiteDestructor}};
 int mode_state = 0; // index of light mode (starts at 0 an max=NUM_MODES)
 bool button_down = false;
 void *state = NULL;
 
-void loop() {  
+void loop() {
   bool button_pressed = false;
 
   if (digitalRead(BUTTON)) {
@@ -280,6 +262,7 @@ void loop() {
   }
 
   if (button_pressed) {
+    Serial.println(sizeof (enum FlashOnSoundCycle));
     if (state != NULL) {
       PROGRAMMS[mode_state % ARRSIZE(PROGRAMMS)].destructor(state);
       state = NULL;
